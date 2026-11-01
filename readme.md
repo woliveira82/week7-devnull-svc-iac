@@ -38,54 +38,53 @@ Host listens on `http://localhost:7071` by default.
 
 ## Deploy to Azure
 
+Infrastructure is managed with Terraform in [`infra/`](infra/) (Resource Group, Storage Account, Application Insights, Flex Consumption plan and Function App). Defaults are tuned to stay within Azure's free allowances; see [`infra/README.md`](infra/README.md) for details.
+
+Prerequisites: Terraform >= 1.5, Azure CLI, Azure Functions Core Tools (installed as a dev dependency).
+
 1. Sign in and select subscription
 
 ```bash
 az login
-az account show
+az account show --query id --output tsv
 ```
 
-2. Create resource group, storage, and Function App (Consumption plan example)
+2. Configure variables
 
 ```bash
-az group create \
-  --name <your-resource-group> \
-  --location <permitted-location>
+cp infra/terraform.tfvars.example infra/terraform.tfvars
 ```
+
+Set `subscription_id` (from the previous step) and, optionally, `location` and `budget_alert_emails`.
+
+3. Provision the infrastructure
 
 ```bash
-az storage account create \
-  --name <yourfuncstorageaccount> \
-  --location <permitted-location> \
-  --resource-group <your-resource-group> \
-  --sku Standard_LRS
+terraform -chdir=infra init
+terraform -chdir=infra plan -out tfplan
+terraform -chdir=infra apply tfplan
 ```
 
-```bash
-az functionapp create \
-  --name <your-function-app> \
-  --resource-group <your-resource-group> \
-  --storage-account <yourfuncstorageaccount> \
-  --consumption-plan-location <permitted-location> \
-  --runtime node \
-  --functions-version 4
-```
+4. Publish the code
 
-3. Publish
+Terraform creates an empty Function App; the code is published with Core Tools:
 
 ```bash
 npm run build
-func azure functionapp publish <appname>
+npx func azure functionapp publish "$(terraform -chdir=infra output -raw function_app_name)"
 ```
 
-4. Read the host auth key
+5. Read the app URL and function key
 
 ```bash
-az functionapp keys list \
-  --name <your-function-app> \
-  --resource-group <your-resource-group> \
-  --query masterKey \
-  --output tsv
+terraform -chdir=infra output -raw function_app_url
+terraform -chdir=infra output -raw default_function_key
+```
+
+6. Tear down
+
+```bash
+terraform -chdir=infra destroy
 ```
 
 ## Endpoints
@@ -127,9 +126,12 @@ curl -i -X POST http://localhost:7071/integration/events/product-updated \
 With host key in Azure:
 
 ```bash
-curl -i -X POST "https://<appname>.azurewebsites.net/integration/events/product-updated" \
+URL=$(terraform -chdir=infra output -raw function_app_url)
+KEY=$(terraform -chdir=infra output -raw default_function_key)
+
+curl -i -X POST "$URL/integration/events/product-updated" \
   -H "Content-Type: application/json" \
-  -H "x-functions-key: <hostkey>" \
+  -H "x-functions-key: $KEY" \
   --data-binary @samples/post-product-updated.json
 ```
 
